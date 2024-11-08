@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import com.slack.circuit.backstack.rememberSaveableBackStack
 import com.slack.circuit.retained.rememberRetained
+import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.presenter.Presenter
@@ -26,6 +27,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 private const val TAG_BUTTON = "TAG_BUTTON"
+private const val TAG_GOTO_BUTTON = "TAG_GOTO_BUTTON"
+private const val TAG_POP_BUTTON = "TAG_POP_BUTTON"
 private const val TAG_UI_RETAINED = "TAG_UI_RETAINED"
 private const val TAG_PRESENTER_RETAINED = "TAG_PRESENTER_RETAINED"
 private const val TAG_STATE = "TAG_STATE"
@@ -43,6 +46,12 @@ class NavigableCircuitContentRetainTest {
       .addUi<ScreenA, ScreenA.State> { _, modifier -> ScreenAUi(modifier) }
       .addPresenter<ScreenB, ScreenB.State> { _, _, _ -> ScreenBPresenter(dataSource) }
       .addUi<ScreenB, ScreenB.State> { state, modifier -> ScreenBUi(state, modifier) }
+      .addPresenter<ScreenC, ScreenC.State> { _, navigator, _ -> ScreenCPresenter(navigator) }
+      .addUi<ScreenC, ScreenC.State> { state, modifier -> ScreenCUi(state, modifier) }
+      .addPresenter<ScreenD, ScreenD.State> { _, navigator, _ ->
+        ScreenDPresenter(navigator)
+      }
+      .addUi<ScreenD, ScreenD.State> { state, modifier -> ScreenDUi(state, modifier) }
       .build()
 
   /** test with presentWithLifecycle=true. */
@@ -124,6 +133,50 @@ class NavigableCircuitContentRetainTest {
     }
   }
 
+  @Test
+  fun test2() {
+    composeTestRule.run {
+      setUpTestContent(circuit.newBuilder().presentWithLifecycle(false).build(), ScreenC)
+      waitForIdle()
+
+      onNodeWithTag(TAG_STATE).assertDoesNotExist()
+      onNodeWithTag(TAG_PRESENTER_RETAINED).assertDoesNotExist()
+      onNodeWithTag(TAG_UI_RETAINED).assertDoesNotExist()
+
+      onNodeWithTag(TAG_GOTO_BUTTON).performClick()
+      onNodeWithTag(TAG_POP_BUTTON).performClick()
+
+      onNodeWithTag(TAG_BUTTON).performClick()
+
+      dataSource.value = 1
+
+      onNodeWithTag(TAG_STATE).assertTextEquals("1")
+      onNodeWithTag(TAG_UI_RETAINED).assertTextEquals("1")
+      onNodeWithTag(TAG_PRESENTER_RETAINED).assertTextEquals("1")
+
+      onNodeWithTag(TAG_BUTTON).performClick()
+
+      onNodeWithTag(TAG_STATE).assertDoesNotExist()
+      onNodeWithTag(TAG_PRESENTER_RETAINED).assertDoesNotExist()
+      onNodeWithTag(TAG_UI_RETAINED).assertDoesNotExist()
+
+      onNodeWithTag(TAG_GOTO_BUTTON).performClick()
+      onNodeWithTag(TAG_POP_BUTTON).performClick()
+
+      dataSource.value = 2
+
+      onNodeWithTag(TAG_BUTTON).performClick()
+
+      onNodeWithTag(TAG_STATE).assertTextEquals("2")
+
+      // UI's rememberRetained is not being reset.
+      onNodeWithTag(TAG_UI_RETAINED).assertTextEquals("2")
+
+      // presenter's rememberRetained is not being reset.
+      onNodeWithTag(TAG_PRESENTER_RETAINED).assertTextEquals("2")
+    }
+  }
+
   private fun ComposeContentTestRule.setUpTestContent(circuit: Circuit, screen: Screen): Navigator {
     lateinit var navigator: Navigator
     setContent {
@@ -137,7 +190,7 @@ class NavigableCircuitContentRetainTest {
   }
 
   private data object ScreenA : Screen {
-    object State : CircuitUiState
+    data object State : CircuitUiState
   }
 
   private class ScreenAPresenter : Presenter<ScreenA.State> {
@@ -165,7 +218,7 @@ class NavigableCircuitContentRetainTest {
 
   private data object ScreenB : Screen {
 
-    class State(val count: Int, val retainedCount: Int) : CircuitUiState
+    data class State(val count: Int, val retainedCount: Int) : CircuitUiState
   }
 
   private class ScreenBPresenter(private val source: DataSource) : Presenter<ScreenB.State> {
@@ -188,6 +241,81 @@ class NavigableCircuitContentRetainTest {
         text = state.retainedCount.toString(),
         modifier = Modifier.testTag(TAG_PRESENTER_RETAINED),
       )
+    }
+  }
+
+  private data object ScreenC : Screen {
+    data class State(val eventSink: (Event) -> Unit) : CircuitUiState
+
+    sealed interface Event : CircuitUiEvent {
+      data class GoTo(val screen: Screen) : Event
+    }
+  }
+
+  private class ScreenCPresenter(private val navigator: Navigator) : Presenter<ScreenC.State> {
+    @Composable
+    override fun present(): ScreenC.State {
+      return ScreenC.State { event ->
+        when (event) {
+          is ScreenC.Event.GoTo -> navigator.goTo(event.screen)
+        }
+      }
+    }
+  }
+
+  @Composable
+  private fun ScreenCUi(state: ScreenC.State, modifier: Modifier = Modifier) {
+    Column(modifier) {
+      Button(
+        modifier = Modifier.testTag(TAG_GOTO_BUTTON),
+        onClick = { state.eventSink(ScreenC.Event.GoTo(ScreenD)) },
+      ) {
+        Text("goto")
+      }
+      val isChildVisible = remember { mutableStateOf(false) }
+      Button(
+        modifier = Modifier.testTag(TAG_BUTTON),
+        onClick = { isChildVisible.value = !isChildVisible.value },
+      ) {
+        Text("toggle")
+      }
+      if (isChildVisible.value) {
+        CircuitContent(screen = ScreenB)
+      }
+    }
+  }
+
+  private data object ScreenD : Screen {
+
+    data class State(val eventSink: (Event) -> Unit) : CircuitUiState
+
+    sealed interface Event : CircuitUiEvent {
+      data object Pop : Event
+    }
+  }
+
+  private class ScreenDPresenter(private val navigator: Navigator) :
+    Presenter<ScreenD.State> {
+
+    @Composable
+    override fun present(): ScreenD.State {
+      return ScreenD.State { event ->
+        when (event) {
+          is ScreenD.Event.Pop -> navigator.pop()
+        }
+      }
+    }
+  }
+
+  @Composable
+  private fun ScreenDUi(state: ScreenD.State, modifier: Modifier = Modifier) {
+    Column(modifier) {
+      Button(
+        onClick = { state.eventSink(ScreenD.Event.Pop) },
+        modifier = Modifier.testTag(TAG_POP_BUTTON),
+      ) {
+        Text(text = "pop")
+      }
     }
   }
 

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material.Button
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -29,6 +30,7 @@ import org.junit.runner.RunWith
 private const val TAG_BUTTON = "TAG_BUTTON"
 private const val TAG_GOTO_BUTTON = "TAG_GOTO_BUTTON"
 private const val TAG_POP_BUTTON = "TAG_POP_BUTTON"
+private const val TAG_CONDITIONAL_RETAINED = "TAG_CONDITIONAL_RETAINED"
 private const val TAG_UI_RETAINED = "TAG_UI_RETAINED"
 private const val TAG_PRESENTER_RETAINED = "TAG_PRESENTER_RETAINED"
 private const val TAG_STATE = "TAG_STATE"
@@ -48,9 +50,7 @@ class NavigableCircuitContentRetainTest {
       .addUi<ScreenB, ScreenB.State> { state, modifier -> ScreenBUi(state, modifier) }
       .addPresenter<ScreenC, ScreenC.State> { _, navigator, _ -> ScreenCPresenter(navigator) }
       .addUi<ScreenC, ScreenC.State> { state, modifier -> ScreenCUi(state, modifier) }
-      .addPresenter<ScreenD, ScreenD.State> { _, navigator, _ ->
-        ScreenDPresenter(navigator)
-      }
+      .addPresenter<ScreenD, ScreenD.State> { _, navigator, _ -> ScreenDPresenter(navigator) }
       .addUi<ScreenD, ScreenD.State> { state, modifier -> ScreenDUi(state, modifier) }
       .build()
 
@@ -134,7 +134,7 @@ class NavigableCircuitContentRetainTest {
   }
 
   @Test
-  fun test2() {
+  fun test_conditional_retain() {
     composeTestRule.run {
       setUpTestContent(circuit.newBuilder().presentWithLifecycle(false).build(), ScreenC)
       waitForIdle()
@@ -143,37 +143,20 @@ class NavigableCircuitContentRetainTest {
       onNodeWithTag(TAG_PRESENTER_RETAINED).assertDoesNotExist()
       onNodeWithTag(TAG_UI_RETAINED).assertDoesNotExist()
 
+      onNodeWithTag(TAG_BUTTON).performClick()
+      waitForIdle()
+
+      onNodeWithTag(TAG_CONDITIONAL_RETAINED).assertTextEquals("1")
+
+      onNodeWithTag(TAG_BUTTON).performClick()
+
       onNodeWithTag(TAG_GOTO_BUTTON).performClick()
       onNodeWithTag(TAG_POP_BUTTON).performClick()
 
       onNodeWithTag(TAG_BUTTON).performClick()
+      waitForIdle()
 
-      dataSource.value = 1
-
-      onNodeWithTag(TAG_STATE).assertTextEquals("1")
-      onNodeWithTag(TAG_UI_RETAINED).assertTextEquals("1")
-      onNodeWithTag(TAG_PRESENTER_RETAINED).assertTextEquals("1")
-
-      onNodeWithTag(TAG_BUTTON).performClick()
-
-      onNodeWithTag(TAG_STATE).assertDoesNotExist()
-      onNodeWithTag(TAG_PRESENTER_RETAINED).assertDoesNotExist()
-      onNodeWithTag(TAG_UI_RETAINED).assertDoesNotExist()
-
-      onNodeWithTag(TAG_GOTO_BUTTON).performClick()
-      onNodeWithTag(TAG_POP_BUTTON).performClick()
-
-      dataSource.value = 2
-
-      onNodeWithTag(TAG_BUTTON).performClick()
-
-      onNodeWithTag(TAG_STATE).assertTextEquals("2")
-
-      // UI's rememberRetained is not being reset.
-      onNodeWithTag(TAG_UI_RETAINED).assertTextEquals("2")
-
-      // presenter's rememberRetained is not being reset.
-      onNodeWithTag(TAG_PRESENTER_RETAINED).assertTextEquals("2")
+      onNodeWithTag(TAG_CONDITIONAL_RETAINED).assertTextEquals("1")
     }
   }
 
@@ -245,6 +228,7 @@ class NavigableCircuitContentRetainTest {
   }
 
   private data object ScreenC : Screen {
+
     data class State(val eventSink: (Event) -> Unit) : CircuitUiState
 
     sealed interface Event : CircuitUiEvent {
@@ -272,15 +256,18 @@ class NavigableCircuitContentRetainTest {
       ) {
         Text("goto")
       }
-      val isChildVisible = remember { mutableStateOf(false) }
+      val isVisible = remember { mutableStateOf(false) }
       Button(
         modifier = Modifier.testTag(TAG_BUTTON),
-        onClick = { isChildVisible.value = !isChildVisible.value },
+        onClick = { isVisible.value = !isVisible.value },
       ) {
         Text("toggle")
       }
-      if (isChildVisible.value) {
-        CircuitContent(screen = ScreenB)
+      if (isVisible.value) {
+        val count = rememberRetained { mutableStateOf(0) }
+        LaunchedEffect(Unit) { count.value += 1 }
+
+        Text(modifier = Modifier.testTag(TAG_CONDITIONAL_RETAINED), text = count.value.toString())
       }
     }
   }
@@ -294,8 +281,7 @@ class NavigableCircuitContentRetainTest {
     }
   }
 
-  private class ScreenDPresenter(private val navigator: Navigator) :
-    Presenter<ScreenD.State> {
+  private class ScreenDPresenter(private val navigator: Navigator) : Presenter<ScreenD.State> {
 
     @Composable
     override fun present(): ScreenD.State {
